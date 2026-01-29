@@ -49,29 +49,28 @@ function common_path(lhs: string, rhs: string) {
 }
 
 function glob_script_files() {
-  const files: string[] = fs
-    .globSync(`src/**/index.{ts,tsx,js,jsx}`)
+  const results: string[] = [];
+
+  fs.globSync(`{示例,src}/**/index.{ts,tsx,js,jsx}`)
     .filter(
       file => process.env.CI !== 'true' || !fs.readFileSync(path.join(import.meta.dirname, file)).includes('@no-ci'),
-    );
+    )
+    .forEach(file => {
+      const file_dirname = path.dirname(file);
+      for (const [index, result] of results.entries()) {
+        const result_dirname = path.dirname(result);
+        const common = common_path(result_dirname, file_dirname);
+        if (common === result_dirname) {
+          return;
+        }
+        if (common === file_dirname) {
+          results.splice(index, 1, file);
+          return;
+        }
+      }
+      results.push(file);
+    });
 
-  const results: string[] = [];
-  const handle = (file: string) => {
-    const file_dirname = path.dirname(file);
-    for (const [index, result] of results.entries()) {
-      const result_dirname = path.dirname(result);
-      const common = common_path(result_dirname, file_dirname);
-      if (common === result_dirname) {
-        return;
-      }
-      if (common === file_dirname) {
-        results.splice(index, 1, file);
-        return;
-      }
-    }
-    results.push(file);
-  };
-  files.forEach(handle);
   return results;
 }
 
@@ -98,7 +97,6 @@ function watch_tavern_helper(compiler: webpack.Compiler) {
 
     compiler.hooks.done.tap('watch_tavern_helper', () => {
       console.info('\n\x1b[36m[tavern_helper]\x1b[0m 检测到完成编译, 推送更新事件...');
-      io.emit('iframe_updated');
       if (compiler.options.plugins.find(plugin => plugin instanceof HtmlWebpackPlugin)) {
         io.emit('message_iframe_updated');
       } else {
@@ -136,6 +134,7 @@ function watch_tavern_sync(compiler: webpack.Compiler) {
   compiler.hooks.watchRun.tap('watch_tavern_sync', () => {
     if (!child_process) {
       child_process = spawn('pnpm', ['sync', 'watch', 'all', '-f'], {
+        shell: true,
         stdio: ['ignore', 'pipe', 'pipe'],
         cwd: import.meta.dirname,
         env: { ...process.env, FORCE_COLOR: '1' },
@@ -207,7 +206,7 @@ function parse_configuration(entry: Entry): (_env: any, argv: any) => webpack.Co
       path: path.join(
         import.meta.dirname,
         'dist',
-        path.relative(path.join(import.meta.dirname, 'src'), script_filepath.dir),
+        path.relative(import.meta.dirname, script_filepath.dir).replace(/^[^\\/]+[\\/]/, ''),
       ),
       chunkFilename: `${script_filepath.name}.[contenthash].chunk.js`,
       asyncChunks: true,
@@ -230,7 +229,7 @@ function parse_configuration(entry: Entry): (_env: any, argv: any) => webpack.Co
               test: /\.tsx?$/,
               loader: 'ts-loader',
               options: {
-                transpileOnly: true,
+                transpileOnly: argv.mode !== 'production',
                 onlyCompileBundledFiles: true,
                 compilerOptions: {
                   noUnusedLocals: false,
@@ -264,7 +263,7 @@ function parse_configuration(entry: Entry): (_env: any, argv: any) => webpack.Co
               test: /\.tsx?$/,
               loader: 'ts-loader',
               options: {
-                transpileOnly: true,
+                transpileOnly: argv.mode !== 'production',
                 onlyCompileBundledFiles: true,
                 compilerOptions: {
                   noUnusedLocals: false,
@@ -298,7 +297,7 @@ function parse_configuration(entry: Entry): (_env: any, argv: any) => webpack.Co
               test: /\.tsx?$/,
               loader: 'ts-loader',
               options: {
-                transpileOnly: true,
+                transpileOnly: argv.mode !== 'production',
                 onlyCompileBundledFiles: true,
                 compilerOptions: {
                   noUnusedLocals: false,
@@ -327,6 +326,16 @@ function parse_configuration(entry: Entry): (_env: any, argv: any) => webpack.Co
                   },
                 },
               ],
+            },
+            {
+              test: /\.ya?ml$/,
+              loader: 'yaml-loader',
+              options: { asStream: true },
+              resourceQuery: /stream/,
+            },
+            {
+              test: /\.ya?ml$/,
+              loader: 'yaml-loader',
             },
           ].concat(
             entry.html === undefined
@@ -513,6 +522,7 @@ function parse_configuration(entry: Entry): (_env: any, argv: any) => webpack.Co
         request.startsWith('!') ||
         request.startsWith('http') ||
         request.startsWith('@/') ||
+        request.startsWith('@util/') ||
         path.isAbsolute(request) ||
         fs.existsSync(path.join(context, request)) ||
         fs.existsSync(request)
